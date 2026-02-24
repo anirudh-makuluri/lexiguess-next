@@ -1,10 +1,8 @@
-import { createServerComponentClient } from '@supabase/auth-helpers-nextjs'
-import { cookies } from 'next/headers'
-import { Database } from '@/types/supabase'
+import { createClient } from '@/utils/supabase/server'
 import Home from './home'
 
 export default async function Page() {
-	const supabase = createServerComponentClient<Database>({ cookies })
+	const supabase = await createClient()
 
 	async function getDailyStreak(userId : string) {
 		const { data, error } = await supabase
@@ -45,7 +43,7 @@ export default async function Page() {
 
 			const streakData = await getDailyStreak(session.user.id);
 
-			return <Home session={session} completedWords={data[0].completed_words} streakData={streakData}/>
+			return <Home session={session.user} completedWords={data[0].completed_words} streakData={streakData}/>
 		} else {
 			throw ''
 		}

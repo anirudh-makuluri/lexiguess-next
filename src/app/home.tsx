@@ -14,10 +14,10 @@ import SettingsOverlay from '@/components/SettingsOverlay';
 import Header from '@/components/Header';
 import AuthOverlay from '@/components/AuthOverlay';
 import { createTheme, ThemeProvider } from '@mui/material/styles';
-import { Session } from '@supabase/auth-helpers-nextjs'
 import { wordType, CompletedUserWordType } from '@/types/words'
-import { createClientComponentClient } from '@supabase/auth-helpers-nextjs'
+import { createClient } from '@/utils/supabase/client'
 import { Database } from '@/types/supabase';
+import { User } from '@supabase/supabase-js'
 import StatsOverlay from '@/components/StatsOverlay';
 
 /*	
@@ -38,13 +38,14 @@ const darkTheme = createTheme({
 export default function Home({
 	session, completedWords, streakData }:
 	{
-		session: Session | null,
+		session: User | null,
 		completedWords: string[],
 		streakData: Database['public']['Tables']['daily_streak']['Row'] | null
 	}) {
 	const regenBtnRef = useRef<HTMLAnchorElement | null>(null);
 	const dummyRef = useRef<any>(null);
-	const supabase = createClientComponentClient<Database>()
+	const handleKeyRef = useRef<(key: string) => void>(() => {});
+	const supabase = createClient()
 
 	const searchParams = useSearchParams();
 	const wordType: wordType = searchParams.get('type') == "hard" ? "hard" : searchParams.get("type") == "daily" ? "daily" : "normal";
@@ -57,75 +58,12 @@ export default function Home({
 	const [completedUserWords, setCompletedUserWords] = useState<CompletedUserWordType[][]>([]);
 	const [activeRow, setActiveRow] = useState<number>(0);
 	const [showAnswer, setShowAnswer] = useState<boolean>(false);
+	const [isValidatingWord, setIsValidatingWord] = useState<boolean>(false);
 	const [wordMeaning, setWordMeaning] = useState<string>('');
 	const [isSettingsModalVisible, setSettingsModalVisibility] = useState<boolean>(false);
 	const [isHelpModalVisible, setHelpModalVisibility] = useState<boolean>(false);
 	const [isAuthModalVisible, setAuthModalVisibility] = useState<boolean>(false);
 	const [isStatsModalVisible, setStatsModalVisibility] = useState<boolean>(false);
-
-	useEffect(() => {
-		const isHelpModalShown = localStorage.getItem('help-modal');
-		if (!isHelpModalShown) {
-			toggleHelpOverlay();
-		}
-	}, []);
-
-	useEffect(() => {
-		if (wordType == "daily") {
-			getDailyWord();
-		} else if (wordType == "hard") {
-			getHardWord();
-		} else {
-			getNormalWord();
-		}
-	}, [wordType, times, wordLength]);
-
-	useEffect(() => {
-		window.onkeydown = (event) => {
-			if (isAuthModalVisible) return;
-			dummyRef.current?.focus();
-			const key = event.key.toLowerCase();
-			handleKey(key);
-		};
-	}, [activeUserWord, isAuthModalVisible]);
-
-	async function getDailyWord() {
-		const date = new Date();
-		const customSeed = `${date.getDate()}-${date.getMonth()}-${date.getFullYear()}`
-		const word: string = generate({ minLength: 5, maxLength: 5, seed: customSeed, exactly: 1 })[0];
-		setGeneratedWord(word);
-		setWordLength(word.length);
-		setNumberOfAttempts(6);
-		setActiveUserWord('');
-		setCompletedUserWords([]);
-		setActiveRow(0);
-		setShowAnswer(false);
-	}
-
-	function getNormalWord() {
-		console.log("Generating normal word");
-		const newWord: any = generate({ minLength: wordLength, maxLength: wordLength });
-		setGeneratedWord(newWord);
-		setWordLength(newWord.length);
-		setActiveUserWord('');
-		setCompletedUserWords([]);
-		setActiveRow(0);
-		setShowAnswer(false);
-		regenBtnRef.current?.blur();
-	}
-
-	function getHardWord() {
-		console.log("Generating hard word");
-		const newWord: string = generateHardWord();
-		setGeneratedWord(newWord);
-		setWordLength(newWord.length);
-		setActiveUserWord('');
-		setCompletedUserWords([]);
-		setActiveRow(0);
-		setShowAnswer(false);
-		setSettingsModalVisibility(false);
-		getWordMeaning(newWord);
-	}
 
 	function getWordMeaning(newWord: string) {
 		try {
@@ -140,84 +78,11 @@ export default function Home({
 		}
 	}
 
-	function handleKey(key: string) {
-		if (alphabeticRegex.test(key) && key.length == 1 && activeUserWord.length < wordLength) {
-			setActiveUserWord(prevWord => prevWord += key);
-		} else if (key == "backspace") {
-			setActiveUserWord(prevWord => prevWord.slice(0, -1));
-		} else if (key == "enter") {
-			validateUserWord();
-		}
-	}
-
-
-	async function validateUserWord() {
-		if (!activeUserWord || activeUserWord.length < wordLength) return;
-
-		let resultArray: CompletedUserWordType[] = [];
-		let correctCount: number = 0;
-		let wrongCount: number = 0;
-
-		console.log(`Validating ${activeUserWord}`);
-		//const isValid = await isValidEnglishWord(activeUserWord);
-
-
-		if (false) { //FIXME: check
-			showErrorToast("Word doesn't exist");
-			setActiveRow(prevRow => prevRow + 1);
-			for (let char of activeUserWord) {
-				resultArray.push({ letter: char, feedback: 0 });
-			}
-			if (activeRow == numberOfAttempts - 1) {
-				showErrorToast("No more attempts left");
-				setShowAnswer(true);
-			}
-			setCompletedUserWords(prevState => [...prevState, resultArray]);
-			setActiveUserWord("");
-			return;
-		}
-
-		for (let i = 0; i < wordLength; i++) {
-			if (generatedWord.includes(activeUserWord[i])) {
-				if (activeUserWord[i] == generatedWord[i]) {
-					resultArray.push({ letter: activeUserWord[i], feedback: 2 });
-					correctCount++;
-				} else {
-					resultArray.push({ letter: activeUserWord[i], feedback: 1 });
-				}
-			} else {
-				wrongCount++;
-				resultArray.push({ letter: activeUserWord[i], feedback: 0 });
-			}
-		}
-
-		if (wrongCount == wordLength) {
-			showErrorToast("No matching characters");
-		}
-
-		if (correctCount == wordLength) {
-			showSuccessToast("You got it right!");
-			updateDb();
-			incrementDailyStreak();
-
-		} else {
-			if (activeRow == numberOfAttempts - 1) {
-				showErrorToast("No more attempts left");
-				setShowAnswer(true);
-			} else {
-				setActiveRow(prevRow => prevRow + 1);
-			}
-		}
-
-		setCompletedUserWords(prevState => [...prevState, resultArray]);
-		setActiveUserWord("");
-	}
-
 	async function isValidEnglishWord(word: string) {
 		return fetch(`https://api.datamuse.com/words?sp=${word}&max=1`)
 			.then(res => res.json())
 			.then(response => {
-				if (response.length > 0 && response[0].word == word) {
+				if (response.length > 0 && response[0].word?.toLowerCase() == word.toLowerCase()) {
 					if (word == "aeiou") {
 						return false;
 					} else {
@@ -268,6 +133,65 @@ export default function Home({
 		setStatsModalVisibility(prevState => !prevState);
 	}
 
+	useEffect(() => {
+		const isHelpModalShown = localStorage.getItem('help-modal');
+		if (!isHelpModalShown) {
+			setHelpModalVisibility(true);
+			localStorage.setItem('help-modal', JSON.stringify(true));
+		}
+	}, []);
+
+	useEffect(() => {
+		if (wordType == "daily") {
+			const date = new Date();
+			const customSeed = `${date.getDate()}-${date.getMonth()}-${date.getFullYear()}`
+			const word: string = generate({ minLength: 5, maxLength: 5, seed: customSeed, exactly: 1 })[0];
+			setGeneratedWord(word);
+			setWordLength(word.length);
+			setNumberOfAttempts(6);
+			setActiveUserWord('');
+			setCompletedUserWords([]);
+			setActiveRow(0);
+			setShowAnswer(false);
+		} else if (wordType == "hard") {
+			console.log("Generating hard word");
+			const newWord: string = generateHardWord();
+			setGeneratedWord(newWord);
+			setWordLength(newWord.length);
+			setActiveUserWord('');
+			setCompletedUserWords([]);
+			setActiveRow(0);
+			setShowAnswer(false);
+			setSettingsModalVisibility(false);
+			getWordMeaning(newWord);
+		} else {
+			console.log("Generating normal word");
+			const newWord: any = generate({ minLength: wordLength, maxLength: wordLength });
+			setGeneratedWord(newWord);
+			setWordLength(newWord.length);
+			setActiveUserWord('');
+			setCompletedUserWords([]);
+			setActiveRow(0);
+			setShowAnswer(false);
+			regenBtnRef.current?.blur();
+		}
+	}, [wordType, times, wordLength]);
+
+	useEffect(() => {
+		const onKeyDown = (event: KeyboardEvent) => {
+			if (isAuthModalVisible) return;
+			dummyRef.current?.focus();
+			const key = event.key.toLowerCase();
+			handleKeyRef.current(key);
+		};
+
+		window.addEventListener('keydown', onKeyDown);
+
+		return () => {
+			window.removeEventListener('keydown', onKeyDown);
+		};
+	}, [isAuthModalVisible]);
+
 	async function updateDb() {
 		const onlyWords = completedWords.map(item => item.split('-')[0]);
 		if (!session || onlyWords.includes(activeUserWord)) return;
@@ -275,7 +199,7 @@ export default function Home({
 
 		const { error } = await supabase.from('profiles').update({
 			completed_words: [...completedWords, `${activeUserWord}-${wordType}-${Date.now()}`]
-		}).eq('id', session?.user.id)
+		}).eq('id', session?.id)
 
 		if (error) console.log(error);
 
@@ -292,7 +216,7 @@ export default function Home({
 			return;
 		}
 
-		const newStreakData : typeof streakData = streakData;
+		const newStreakData: typeof streakData = { ...streakData };
 
 		if(streakData.recent_date == null) {
 			newStreakData.recent_date = today.toISOString().split('T')[0];
@@ -318,12 +242,80 @@ export default function Home({
 		const { error } = await supabase
 			.from('daily_streak')
 			.update(newStreakData)
-			.eq('user_id', session?.user.id)
+			.eq('user_id', session?.id)
 
 		if(error) console.error(error);
 
 		return;
 	}
+
+	async function validateUserWord() {
+		if (!activeUserWord || activeUserWord.length < wordLength || isValidatingWord) return;
+
+		let resultArray: CompletedUserWordType[] = [];
+		let correctCount: number = 0;
+		let wrongCount: number = 0;
+
+		console.log(`Validating ${activeUserWord}`);
+		setIsValidatingWord(true);
+		const isValid = await isValidEnglishWord(activeUserWord);
+		setIsValidatingWord(false);
+
+
+		if (!isValid) {
+			showErrorToast("Word doesn't exist");
+			return;
+		}
+
+		for (let i = 0; i < wordLength; i++) {
+			if (generatedWord.includes(activeUserWord[i])) {
+				if (activeUserWord[i] == generatedWord[i]) {
+					resultArray.push({ letter: activeUserWord[i], feedback: 2 });
+					correctCount++;
+				} else {
+					resultArray.push({ letter: activeUserWord[i], feedback: 1 });
+				}
+			} else {
+				wrongCount++;
+				resultArray.push({ letter: activeUserWord[i], feedback: 0 });
+			}
+		}
+
+		if (wrongCount == wordLength) {
+			showErrorToast("No matching characters");
+		}
+
+		if (correctCount == wordLength) {
+			showSuccessToast("You got it right!");
+			updateDb();
+			incrementDailyStreak();
+
+		} else {
+			if (activeRow == numberOfAttempts - 1) {
+				showErrorToast("No more attempts left");
+				setShowAnswer(true);
+			} else {
+				setActiveRow(prevRow => prevRow + 1);
+			}
+		}
+
+		setCompletedUserWords(prevState => [...prevState, resultArray]);
+		setActiveUserWord("");
+	}
+
+	function handleKey(key: string) {
+		if (alphabeticRegex.test(key) && key.length == 1 && activeUserWord.length < wordLength) {
+			setActiveUserWord(prevWord => prevWord + key);
+		} else if (key == "backspace") {
+			setActiveUserWord(prevWord => prevWord.slice(0, -1));
+		} else if (key == "enter") {
+			validateUserWord();
+		}
+	}
+
+	useEffect(() => {
+		handleKeyRef.current = handleKey;
+	});
 
 
 	return (
@@ -335,7 +327,7 @@ export default function Home({
 					toggleSettingsOverlay={toggleSettingsOverlay}
 					toggleAuthOverlay={toggleAuthOverlay}
 					toggleStatsOverlay={toggleStatsOverlay}
-					email={session?.user.email}
+					email={session?.email}
 					streakData={streakData}
 				/>
 				<main className='mt-28 flex flex-col items-center justify-center gap-y-6'>

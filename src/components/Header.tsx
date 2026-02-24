@@ -130,7 +130,7 @@ export default function Header({
 						className='uppercase bg-slate-700 w-10 h-10 rounded-full flex justify-center items-center'>
 						{email ? email[0] : ''}
 					</button>
-					<Button style={{ display: email ? "none" : "flex" }} onClick={toggleAuthOverlay} variant='outlined'>
+					<Button style={{ display: email ? "none" : "none" }} onClick={toggleAuthOverlay} variant='outlined'>
 						SignUp / SignIn
 					</Button>
 					<Menu

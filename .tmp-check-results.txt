@@ -1,0 +1,106 @@
+=== daily-streak-date-integrity ===
+Based on my review of the code diff against the "Daily Streak Date Integrity" check, here is my analysis:
+
+## FAIL
+
+### Critical Issues
+
+1. **Warning: Timezone-unsafe date normalization (line 147, 214, 222, 231, 235, page.tsx:20-21)**
+   - The daily streak logic uses `new Date()` which creates a date in the client's local timezone, then calls `.toISOString().split('T')[0]` to get the date string.
+   - **Issue**: `.toISOString()` returns UTC time, not local time. If a user in EST solves a puzzle at 11 PM EST (4 AM UTC next day), it will record the UTC date instead of their local date, causing date misalignment and potential duplicate solves or incorrect streak resets.
+   - **Fix**: Use a consistent local date format instead: `new Date().toLocaleDateString('en-CA')` or extract components via `getFullYear()`, `getMonth()`, `getDate()`.
+
+2. **Warning: Duplicate date comparison logic (page.tsx:20-26 vs home.tsx:214-216)**
+   - The same day-difference calculation and reset logic exists in both `page.tsx` (server) and `home.tsx` (client) in `incrementDailyStreak()`.
+   - **Issue**: These functions use different date sources (server vs client local time). If they disagree about what "today" is, users can see inconsistent streak behavior or trigger the duplicate-solve guard incorrectly.
+   - **Fix**: Canonicalize date handling: either pass the authoritative "today" from server to client, or move all streak increment logic to server-side only.
+
+3. **Error: Shallow copy without proper initialization (home.tsx:219)**
+   - `const newStreakData: typeof streakData = { ...streakData };` spreads a potentially `null` object.
+   - **Issue**: If `streakData` is `null` (first-time user on server side), this creates `{}` which lacks required fields and causes type errors or missing updates.
+   - **Fix**: Validate `streakData` is not null before spreading, or initialize with defaults: `const newStreakData = streakData ? { ...streakData } : { recent_date: null, current_streak: 0, ... }`.
+
+### Non-Critical Observations
+
+- The diff improves word validation by adding case-insensitive comparison (line 85), which is good.
+- The refactor correctly changes `session?.user.id` to `session?.id` after the API update.
+- Event listener cleanup in the keyboard handler (lines 188-192) prevents memory leaks, which is correct.
+
+=== gameplay-state-consistency ===
+Now I have the full diff. Let me analyze it against the gameplay state consistency check:
+
+## Review: Gameplay State Consistency
+
+**FAIL**
+
+### Finding 1: Generated word shape type inconsistency (ERROR)
+**File:** `src/app/home.tsx`, line 169
+**Issue:** Line 169 uses `const newWord: any = generate(...)` which assigns an array directly to `setGeneratedWord()` without extracting the first element. The `generate()` function returns an array of strings, but this code passes the entire array (`any` type) instead of a single string.
+
+**Fix:** Change line 169 to:
+```ts
+const [newWord] = generate({ minLength: wordLength, maxLength: wordLength });
+setGeneratedWord(newWord);
+```
+
+### Finding 2: Invalid word validation not enforcing state reset (ERROR)
+**File:** `src/app/home.tsx`, line 252
+**Issue:** When `isValidEnglishWord()` returns false (line 265), the function returns early without resetting state. The old code had logic to add failed attempts to `completedUserWords` and increment `activeRow`, but the new code just returns. This breaks the gameplay contract—failed word validation should still progress the row and show visual feedback.
+
+**Fix:** When an invalid word is detected, still populate `resultArray` with all feedback=0 and update completed words and row, matching the expected behavior from line 294 logic.
+
+### Finding 3: Input validation bypass risk (WARNING)
+**File:** `src/app/home.tsx`, line 252
+**Issue:** The guard `if (!activeUserWord || activeUserWord.length < wordLength || isValidatingWord) return;` protects against async validation flying, but there's no explicit duplicate-submit prevention during the validation window. If validation is slow, rapid Enter presses could queue multiple validations.
+
+**Context:** While `isValidatingWord` flag prevents setting state, it doesn't prevent the initial call. This is lower severity since async state management should prevent actual double-validation, but it's worth noting.
+
+=== supabase-mutation-boundaries ===
+Based on my review of the code against the Supabase Mutation Boundaries check, here are my findings:
+
+## FAIL
+
+### Error: Client-controlled mutation without server authorization
+
+**File:** `src/app/home.tsx:195-207` (updateDb function)
+
+The `updateDb()` function performs an insert/update mutation on the `profiles` table from a client component using a browser client:
+- Line 48: `const supabase = createClient()` - uses browser client (from `@/utils/supabase/client`)
+- Lines 200-202: Directly updates `completed_words` with `.eq('id', session?.id)`
+
+**Issues:**
+1. The client can fabricate completed words arbitrarily
+2. No server-side validation of the word completion
+3. The session ID is passed from client props (line 42: `session: User | null`), not verified server-side
+4. Error handling silently logs the error (line 204)
+
+**Fix:** Move `updateDb()` to a server action or API route that verifies the session server-side using `createClient()` from `@/utils/supabase/server`.
+
+---
+
+### Error: Client-controlled mutation without server authorization
+
+**File:** `src/app/home.tsx:209-250` (incrementDailyStreak function)
+
+The `incrementDailyStreak()` function performs an update mutation on the `daily_streak` table from a client component:
+- Lines 242-245: Updates `daily_streak` table with `.eq('user_id', session?.id)`
+- Line 247: Error handling only logs to console
+
+**Issues:**
+1. Streak calculations are done client-side and sent to database unverified
+2. A user could manually increment their streak count before sending
+3. Session verification depends on client-passed data
+4. Critical write failure handling is silent
+
+**Fix:** Move `incrementDailyStreak()` to a server action or API route with server-side session verification using `@/utils/supabase/server`.
+
+---
+
+### Warning: Session identity not explicitly verified server-side
+
+**File:** `src/app/page.tsx:38-39`
+
+The server-side read uses `session?.user.id` for database queries, which is good practice. However, the `Home` component receives `session` as a prop and uses it directly for mutations (home.tsx lines 197, 202, 245). This creates a trust boundary issue where the client component relies on props for sensitive operations.
+
+**Recommendation:** Use server actions with fresh server-side session verification for all mutations.
+
