@@ -1,6 +1,6 @@
 # LexiGuess - Word Guessing Game
 
-Welcome to LexiGuess, a fun and challenging word guessing game where you can test your vocabulary skills! Try to guess the word within a limited number of attempts, and explore different game modes to keep things interesting.
+Welcome to LexiGuess, fun and challenging word guessing game where you can test your vocabulary skills! Try to guess the word within a limited number of attempts, and explore different game modes to keep things interesting.
 
 ## Game Modes
 
